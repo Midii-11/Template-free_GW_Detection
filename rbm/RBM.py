@@ -16,8 +16,11 @@ class RBM:
                  learning_rate=0.01,
                  momentum=0.95,
                  xavier_const=1.0,
-                 err_function='mse',
+                 err_function='cosine',
                  use_tqdm=False):
+
+        self.sample_visible = False
+        self.sigma = 1
         if not 0.0 <= momentum <= 1.0:
             raise ValueError('momentum should be in range [0, 1]')
 
@@ -29,7 +32,6 @@ class RBM:
 
         if use_tqdm or tqdm is not None:
             self._tqdm = tqdm
-
         self.n_visible = n_visible
         self.n_hidden = n_hidden
         self.learning_rate = learning_rate
@@ -38,7 +40,7 @@ class RBM:
         self.x = tf.placeholder(tf.float32, [None, self.n_visible])
         self.y = tf.placeholder(tf.float32, [None, self.n_hidden])
 
-        self.w = tf.Variable(self.tf_xavier_init(self.n_visible, self.n_hidden, const=xavier_const), dtype=tf.float32)
+        self.w = tf.Variable(tf_xavier_init(n_visible, n_hidden), dtype=tf.float32)
         self.visible_bias = tf.Variable(tf.zeros([self.n_visible]), dtype=tf.float32)
         self.hidden_bias = tf.Variable(tf.zeros([self.n_hidden]), dtype=tf.float32)
 
@@ -60,7 +62,7 @@ class RBM:
         assert self.compute_visible is not None
         assert self.compute_visible_from_hidden is not None
 
-        #Todo change error function
+        # Todo change error function
         if err_function == 'cosine':
             x1_norm = tf.nn.l2_normalize(self.x, 1)
             x2_norm = tf.nn.l2_normalize(self.compute_visible, 1)
@@ -74,8 +76,39 @@ class RBM:
         self.sess.run(init)
 
     def _initialize_vars(self):
-        # just use one of the last three initializer methods, no clue which works best for GW
-        pass
+        hidden_p = tf.nn.sigmoid(tf.matmul(self.x, self.w) + self.hidden_bias)
+        visible_recon_p = tf.matmul(sample_bernoulli(hidden_p), tf.transpose(self.w)) + self.visible_bias
+
+        if self.sample_visible:
+            visible_recon_p = sample_gaussian(visible_recon_p, self.sigma)
+
+        hidden_recon_p = tf.nn.sigmoid(tf.matmul(visible_recon_p, self.w) + self.hidden_bias)
+
+        positive_grad = tf.matmul(tf.transpose(self.x), hidden_p)
+        negative_grad = tf.matmul(tf.transpose(visible_recon_p), hidden_recon_p)
+
+        def f(x_old, x_new):
+            return self.momentum * x_old + \
+                   self.learning_rate * x_new * (1 - self.momentum) / tf.to_float(tf.shape(x_new)[0])
+
+        delta_w_new = f(self.delta_w, positive_grad - negative_grad)
+        delta_visible_bias_new = f(self.delta_visible_bias, tf.reduce_mean(self.x - visible_recon_p, 0))
+        delta_hidden_bias_new = f(self.delta_hidden_bias, tf.reduce_mean(hidden_p - hidden_recon_p, 0))
+
+        update_delta_w = self.delta_w.assign(delta_w_new)
+        update_delta_visible_bias = self.delta_visible_bias.assign(delta_visible_bias_new)
+        update_delta_hidden_bias = self.delta_hidden_bias.assign(delta_hidden_bias_new)
+
+        update_w = self.w.assign(self.w + delta_w_new)
+        update_visible_bias = self.visible_bias.assign(self.visible_bias + delta_visible_bias_new)
+        update_hidden_bias = self.hidden_bias.assign(self.hidden_bias + delta_hidden_bias_new)
+
+        self.update_deltas = [update_delta_w, update_delta_visible_bias, update_delta_hidden_bias]
+        self.update_weights = [update_w, update_visible_bias, update_hidden_bias]
+
+        self.compute_hidden = tf.nn.sigmoid(tf.matmul(self.x, self.w) + self.hidden_bias)
+        self.compute_visible = tf.matmul(self.compute_hidden, tf.transpose(self.w)) + self.visible_bias
+        self.compute_visible_from_hidden = tf.matmul(self.y, tf.transpose(self.w)) + self.visible_bias
 
     def get_err(self, batch_x):
         return self.sess.run(self.compute_err, feed_dict={self.x: batch_x})
@@ -100,7 +133,7 @@ class RBM:
             data_x,
             n_epoches=10,
             batch_size=10,
-            shuffle=True,
+            shuffle=False,
             verbose=True):
         assert n_epoches > 0
 
@@ -178,13 +211,15 @@ class RBM:
                                 name + '_h': self.hidden_bias})
         saver.restore(self.sess, filename)
 
-    # initializers
-    def tf_xavier_init(fan_in, fan_out, *, const=1.0, dtype=np.float32):
-        k = const * np.sqrt(6.0 / (fan_in + fan_out))
-        return tf.random_uniform((fan_in, fan_out), minval=-k, maxval=k, dtype=dtype)
 
-    def sample_bernoulli_init(probs):
-        return tf.nn.relu(tf.sign(probs - tf.random_uniform(tf.shape(probs))))
+def tf_xavier_init(fan_in, fan_out, const=1.0, dtype=np.float32):
+    k = const * np.sqrt(6.0 / (2 + int(fan_out)))
+    return tf.random_uniform(np.array([fan_in, fan_out]), minval=-k, maxval=k, dtype=dtype)
 
-    def sample_gaussian_init(x, sigma):
-        return x + tf.random_normal(tf.shape(x), mean=0.0, stddev=sigma, dtype=tf.float32)
+
+def sample_bernoulli(probs):
+    return tf.nn.relu(tf.sign(probs - tf.random_uniform(tf.shape(probs))))
+
+
+def sample_gaussian(x, sigma):
+    return x + tf.random_normal(tf.shape(x), mean=0.0, stddev=sigma, dtype=tf.float32)
