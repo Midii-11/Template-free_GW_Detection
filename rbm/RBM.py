@@ -5,7 +5,6 @@ import numpy as np
 import sys
 from tqdm import tqdm
 
-
 # Copyright (c) 2016 Michal Lukac, Egor Malykh
 # Todo its an MIT license so we can use it but check whats about the changes and where to credit
 
@@ -66,7 +65,7 @@ class RBM:
         if err_function == 'cosine':
             x1_norm = tf.nn.l2_normalize(self.x, 1)
             x2_norm = tf.nn.l2_normalize(self.compute_visible, 1)
-            cos_val = tf.reduce_mean(tf.reduce_sum(tf.mul(x1_norm, x2_norm), 1))
+            cos_val = tf.reduce_mean(tf.reduce_sum(tf.math.multiply(x1_norm, x2_norm), 1))
             self.compute_err = tf.acos(cos_val) / tf.constant(np.pi)
         else:
             self.compute_err = tf.reduce_mean(tf.square(self.x - self.compute_visible))
@@ -113,9 +112,11 @@ class RBM:
     def get_err(self, batch_x):
         return self.sess.run(self.compute_err, feed_dict={self.x: batch_x})
 
-    def get_free_energy(self):
-        # Todo implement free energy to calculate state probability -> F(v) = -ln(sum_{h} e^(-E(v,h)))
-        pass
+    def get_free_energy(self, sample):
+        wx_b = tf.tensordot(sample, self.w) + self.hidden_bias
+        vbias_term = tf.tensordot(sample, self.visible_bias)
+        hidden_term = tf.reduce_sum(tf.math.log(1 + tf.math.exp(wx_b)), axis=1)
+        return -hidden_term - vbias_term
 
     def transform(self, batch_x):
         return self.sess.run(self.compute_hidden, feed_dict={self.x: batch_x})
