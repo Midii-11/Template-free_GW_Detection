@@ -5,6 +5,7 @@ import numpy as np
 import sys
 from tqdm import tqdm
 
+
 # Copyright (c) 2016 Michal Lukac, Egor Malykh
 # Todo its an MIT license so we can use it but check whats about the changes and where to credit
 
@@ -36,6 +37,7 @@ class RBM:
         self.learning_rate = learning_rate
         self.momentum = momentum
 
+        self.sample = tf.placeholder(tf.float32, [self.n_visible])
         self.x = tf.placeholder(tf.float32, [None, self.n_visible])
         self.y = tf.placeholder(tf.float32, [None, self.n_hidden])
 
@@ -109,14 +111,22 @@ class RBM:
         self.compute_visible = tf.matmul(self.compute_hidden, tf.transpose(self.w)) + self.visible_bias
         self.compute_visible_from_hidden = tf.matmul(self.y, tf.transpose(self.w)) + self.visible_bias
 
+        self.wx_b = tf.tensordot(tf.cast(self.sample, tf.float32), self.w, axes=1) + self.hidden_bias
+        self.vbias_term = tf.tensordot(tf.cast(self.sample, tf.float32), self.visible_bias, axes=0)
+        self.hidden_term = tf.reduce_sum(tf.math.log(1 + tf.math.exp(self.wx_b)), reduction_indices=[0])
+
     def get_err(self, batch_x):
         return self.sess.run(self.compute_err, feed_dict={self.x: batch_x})
 
     def get_free_energy(self, sample):
-        wx_b = tf.tensordot(sample, self.w) + self.hidden_bias
-        vbias_term = tf.tensordot(sample, self.visible_bias)
-        hidden_term = tf.reduce_sum(tf.math.log(1 + tf.math.exp(wx_b)), axis=1)
-        return -hidden_term - vbias_term
+        # vbias_term = self.sess.run(self.vbias_term, feed_dict={self.x : sample})
+        return self.sess.run(-self.hidden_term - self.vbias_term, feed_dict={self.sample: sample})[0, 0]
+
+        # print('vbias',vbias_term.shape)
+
+        # tf.print( hidden_term)
+
+        # return -hidden_term - vbias_term
 
     def transform(self, batch_x):
         return self.sess.run(self.compute_hidden, feed_dict={self.x: batch_x})
